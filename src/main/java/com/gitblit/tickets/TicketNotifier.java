@@ -55,6 +55,7 @@ import com.gitblit.models.TicketModel;
 import com.gitblit.models.TicketModel.Change;
 import com.gitblit.models.TicketModel.Field;
 import com.gitblit.models.TicketModel.Patchset;
+import com.gitblit.models.TicketModel.Reference;
 import com.gitblit.models.TicketModel.Review;
 import com.gitblit.models.TicketModel.Status;
 import com.gitblit.models.UserModel;
@@ -317,6 +318,21 @@ public class TicketNotifier {
 			// comment update
 			sb.append(MessageFormat.format("**{0}** commented on this ticket.", user.getDisplayName()));
 			sb.append(HARD_BRK);
+		} else if (lastChange.hasReferences()) {
+			// reference update
+			for (Reference ref : lastChange.references) {
+				String type = "";
+
+				switch (ref.getReferenceType()) {
+					case Commit: { type = "commit"; } break;
+					case Ticket: { type = "ticket"; } break;
+					default: { } break;
+				}
+				
+				sb.append(MessageFormat.format("**{0}** referenced this ticket in {1} {2}", type, lastChange.toString())); 
+			}
+			sb.append(HARD_BRK);
+			
 		} else {
 			// general update
 			pattern = "**{0}** has updated this ticket.";

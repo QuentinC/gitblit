@@ -49,6 +49,8 @@ import com.gitblit.models.TicketModel.Change;
 import com.gitblit.models.TicketModel.Field;
 import com.gitblit.models.TicketModel.Patchset;
 import com.gitblit.models.TicketModel.PatchsetType;
+import com.gitblit.models.TicketModel.Reference;
+import com.gitblit.models.TicketModel.ReferenceType;
 import com.gitblit.models.TicketModel.Status;
 import com.gitblit.tickets.TicketIndexer.Lucene;
 import com.gitblit.utils.DeepCopier;
@@ -1041,6 +1043,23 @@ public abstract class ITicketService implements IManager {
 		TicketKey key = new TicketKey(repository, ticketId);
 		ticketsCache.invalidate(key);
 
+		List<Reference> ticketReferences = new ArrayList<Reference>();
+		List<Reference> ownReferences = new ArrayList<Reference>();
+		
+		//RULE: Only changes with a comment can back reference the ticket
+		//		Critical rule to avoid infinite references been made
+		if (change.hasComment() && change.hasReferences()) {
+			//References to tickets are stored in the tickets referenced
+			for (Reference ref : change.references) {
+				if (ref.getReferenceType() == ReferenceType.Ticket) {
+					ticketReferences.add(ref);
+				} else {
+					ownReferences.add(ref);
+				}
+			}
+			change.references = ownReferences;
+		}
+		
 		boolean success = commitChangeImpl(repository, ticketId, change);
 		if (success) {
 			TicketModel ticket = getTicket(repository, ticketId);
@@ -1057,6 +1076,17 @@ public abstract class ITicketService implements IManager {
 					}
 				}
 			}
+
+			//For valid ticket references add references back to this ticket
+			for (Reference ref : ticketReferences) {
+				TicketModel refTicket = getTicket(repository, ref.ticketId);
+				if (refTicket != null) {
+					Change dstChange = new Change(change.author, change.date);
+					dstChange.addReferenceToTicket(ticket.number, change.comment.id);
+					updateTicket(repository, ref.ticketId , dstChange);
+				}
+			}
+
 			return ticket;
 		}
 		return null;

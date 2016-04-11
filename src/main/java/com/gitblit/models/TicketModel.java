@@ -40,8 +40,8 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-
 import org.eclipse.jgit.util.RelativeDateFormatter;
+
 
 /**
  * The Gitblit Ticket model, its component classes, and enums.
@@ -645,6 +645,8 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 
 		public Comment comment;
 
+		public List<Reference> references;
+
 		public Map<Field, String> fields;
 
 		public Set<Attachment> attachments;
@@ -688,11 +690,34 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 		public boolean hasComment() {
 			return comment != null && !comment.isDeleted() && comment.text != null;
 		}
+		
+		public boolean hasReferences() {
+			return references != null && references.size() > 0;
+		}
 
 		public Comment comment(String text) {
 			comment = new Comment(text);
 			comment.id = TicketModel.getSHA1(date.toString() + author + text);
 
+			// parse comment looking for ref #n
+			//TODO: Ideally set via settings
+			String x = "(?:ref|task|issue|bug)?[\\s-]*#?(\\d+)";
+
+			try {
+				Pattern p = Pattern.compile(x, Pattern.CASE_INSENSITIVE);
+				Matcher m = p.matcher(text);
+				while (m.find()) {
+					String val = m.group(1);
+					long ticketId = Long.parseLong(val);
+					
+					if (ticketId > 0) {
+						addReferenceToTicket(ticketId, comment.id);
+					}
+				}
+			} catch (Exception e) {
+				// ignore
+			}
+			
 			try {
 				Pattern mentions = Pattern.compile("\\s@([A-Za-z0-9-_]+)");
 				Matcher m = mentions.matcher(text);
@@ -706,6 +731,28 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 			return comment;
 		}
 
+		public Reference addReferenceToCommit(String commitHash) {
+			if (references == null) {
+				references = new ArrayList<Reference>();
+			}
+			
+			Reference currentReference = new Reference(commitHash); 
+			references.add(currentReference);
+			
+			return currentReference;
+		}
+
+		public Reference addReferenceToTicket(long ticketId, String changeHash) {
+			if (references == null) {
+				references = new ArrayList<Reference>();
+			}
+			
+			Reference currentReference = new Reference(ticketId, changeHash); 
+			references.add(currentReference);
+			
+			return currentReference;
+		}
+		
 		public Review review(Patchset patchset, Score score, boolean addReviewer) {
 			if (addReviewer) {
 				plusList(Field.reviewers, author);
@@ -1143,6 +1190,85 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 		@Override
 		public String toString() {
 			return text;
+		}
+	}
+	
+	public static enum ReferenceType {
+		Undefined, Commit, Ticket;
+	
+		@Override
+		public String toString() {
+			return name().toLowerCase().replace('_', ' ');
+		}
+		
+		public static ReferenceType fromObject(Object o, ReferenceType defaultType) {
+			if (o instanceof ReferenceType) {
+				// cast and return
+				return (ReferenceType) o;
+			} else if (o instanceof String) {
+				// find by name
+				for (ReferenceType type : values()) {
+					String str = o.toString();
+					if (type.name().equalsIgnoreCase(str)
+							|| type.toString().equalsIgnoreCase(str)) {
+						return type;
+					}
+				}
+			} else if (o instanceof Number) {
+				// by ordinal
+				int id = ((Number) o).intValue();
+				if (id >= 0 && id < values().length) {
+					return values()[id];
+				}
+			}
+
+			return defaultType;
+		}
+	}
+	
+	public static class Reference implements Serializable {
+	
+		private static final long serialVersionUID = 1L;
+		
+		public String hash;
+		public Long ticketId;
+		
+		public Boolean deleted;
+		
+		Reference(String commitHash) {
+			this.hash = commitHash;
+		}
+		
+		Reference(long ticketId, String changeHash) {
+			this.ticketId = ticketId;
+			this.hash = changeHash;
+		}
+		
+		public ReferenceType getReferenceType(){
+			if (hash != null) {
+				if (ticketId != null) {
+					return ReferenceType.Ticket;
+				} else {
+					return ReferenceType.Commit;
+				}
+			}
+			
+			return ReferenceType.Undefined;
+		}
+		
+		public boolean isDeleted() {
+			return deleted != null && deleted;
+		}
+		
+		@Override
+		public String toString() {
+			switch (getReferenceType()) {
+				case Commit: return hash;
+				case Ticket: return ticketId.toString() + "#" + hash;
+				default: {} break;
+			}
+			
+			return String.format("Unknown Reference Type");
 		}
 	}
 
