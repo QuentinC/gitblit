@@ -907,32 +907,29 @@ public class TicketPage extends RepositoryPage {
 					item.add(new Label("patchsetType").setVisible(false));
 					item.add(new Label("deleteRevision").setVisible(false));
 					item.add(new Label("patchsetDiffStat").setVisible(false));
-				} else if (event.hasReferences()) {
+				} else if (event.hasReference()) {
 					// reference
-					
-					//NOTE: Only supporting 1 reference at a time
-					TicketModel.Reference reference = event.references.get(0);
-					switch (reference.getReferenceType()) {
+					switch (event.reference.getSourceType()) {
 						case Commit: {
 							final int shaLen = app().settings().getInteger(Keys.web.shortCommitIdLength, 6);
 							
 							item.add(new Label("what", getString("gb.referencedByCommit")));
-							LinkPanel psr = new LinkPanel("patchsetRevision", null, reference.toString().substring(0, shaLen),
-									CommitPage.class, WicketUtils.newObjectParameter(repositoryName, reference.toString()), true);
+							LinkPanel psr = new LinkPanel("patchsetRevision", null, event.reference.toString().substring(0, shaLen),
+									CommitPage.class, WicketUtils.newObjectParameter(repositoryName, event.reference.toString()), true);
 							
-							WicketUtils.setHtmlTooltip(psr, reference.toString());
+							WicketUtils.setHtmlTooltip(psr, event.reference.toString());
 							item.add(psr);
 							
 						} break;
 						
 						case Ticket: {
-							final String text = MessageFormat.format("ticket/{0}", reference.ticketId);
+							final String text = MessageFormat.format("ticket/{0}", event.reference.ticketId);
 
 							item.add(new Label("what", getString("gb.referencedByTicket")));
 							//NOTE: Ideally reference the exact comment using reference.toString,
 							//		however anchor hash is used and is escaped resulting in broken link
 							LinkPanel psr = new LinkPanel("patchsetRevision", null,  text,
-									TicketsPage.class, WicketUtils.newObjectParameter(repositoryName, reference.ticketId.toString()), true);
+									TicketsPage.class, WicketUtils.newObjectParameter(repositoryName, event.reference.ticketId.toString()), true);
 							
 							item.add(psr);
 						} break;

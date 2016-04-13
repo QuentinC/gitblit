@@ -40,8 +40,8 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
-import org.eclipse.jgit.util.RelativeDateFormatter;
 
+import org.eclipse.jgit.util.RelativeDateFormatter;
 
 /**
  * The Gitblit Ticket model, its component classes, and enums.
@@ -645,7 +645,7 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 
 		public Comment comment;
 
-		public List<Reference> references;
+		public Reference reference;
 
 		public Map<Field, String> fields;
 
@@ -656,6 +656,10 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 		public Review review;
 
 		private transient String id;
+
+		//Once links have been made they become a reference on the target ticket
+		//The ticket service handles promoting links to references
+		public transient List<TicketLink> pendingLinks;
 
 		public Change(String author) {
 			this(author, new Date());
@@ -691,8 +695,12 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 			return comment != null && !comment.isDeleted() && comment.text != null;
 		}
 		
-		public boolean hasReferences() {
-			return references != null && references.size() > 0;
+		public boolean hasReference() {
+			return reference != null && !reference.isDeleted();
+		}
+
+		public boolean hasPendingLinks() {
+			return pendingLinks != null && pendingLinks.size() > 0;
 		}
 
 		public Comment comment(String text) {
@@ -708,10 +716,14 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 				Matcher m = p.matcher(text);
 				while (m.find()) {
 					String val = m.group(1);
-					long ticketId = Long.parseLong(val);
+					long targetTicketId = Long.parseLong(val);
 					
-					if (ticketId > 0) {
-						addReferenceToTicket(ticketId, comment.id);
+					if (targetTicketId > 0) {
+						if (pendingLinks == null) {
+							pendingLinks = new ArrayList<TicketLink>();
+						}
+						
+						pendingLinks.add(new TicketLink(targetTicketId, TicketAction.Comment));
 					}
 				}
 			} catch (Exception e) {
@@ -731,26 +743,14 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 			return comment;
 		}
 
-		public Reference addReferenceToCommit(String commitHash) {
-			if (references == null) {
-				references = new ArrayList<Reference>();
-			}
-			
-			Reference currentReference = new Reference(commitHash); 
-			references.add(currentReference);
-			
-			return currentReference;
+		public Reference referenceCommit(String commitHash) {
+			reference = new Reference(commitHash);
+			return reference;
 		}
 
-		public Reference addReferenceToTicket(long ticketId, String changeHash) {
-			if (references == null) {
-				references = new ArrayList<Reference>();
-			}
-			
-			Reference currentReference = new Reference(ticketId, changeHash); 
-			references.add(currentReference);
-			
-			return currentReference;
+		public Reference referenceTicket(long ticketId, String changeHash) {
+			reference = new Reference(ticketId, changeHash);
+			return reference;
 		}
 		
 		public Review review(Patchset patchset, Score score, boolean addReviewer) {
@@ -1193,6 +1193,32 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 		}
 	}
 	
+	
+	public static enum TicketAction {
+		Commit, Comment, Patchset, Close
+	}
+	
+	//Intentionally not serialized, links are persisted as "references"
+	public static class TicketLink {
+		public long targetTicketId;
+		public String hash;
+		public TicketAction action;
+		public boolean success;
+		
+		public TicketLink(long targetTicketId, TicketAction action) {
+			this.targetTicketId = targetTicketId;
+			this.action = action;
+			success = false;
+		}
+		
+		public TicketLink(long targetTicketId, TicketAction action, String hash) {
+			this.targetTicketId = targetTicketId;
+			this.action = action;
+			this.hash = hash;
+			success = false;
+		}
+	}
+	
 	public static enum ReferenceType {
 		Undefined, Commit, Ticket;
 	
@@ -1244,7 +1270,7 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 			this.hash = changeHash;
 		}
 		
-		public ReferenceType getReferenceType(){
+		public ReferenceType getSourceType(){
 			if (hash != null) {
 				if (ticketId != null) {
 					return ReferenceType.Ticket;
@@ -1262,7 +1288,7 @@ public class TicketModel implements Serializable, Comparable<TicketModel> {
 		
 		@Override
 		public String toString() {
-			switch (getReferenceType()) {
+			switch (getSourceType()) {
 				case Commit: return hash;
 				case Ticket: return ticketId.toString() + "#" + hash;
 				default: {} break;

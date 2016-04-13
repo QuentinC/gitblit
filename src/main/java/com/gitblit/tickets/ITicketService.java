@@ -49,9 +49,8 @@ import com.gitblit.models.TicketModel.Change;
 import com.gitblit.models.TicketModel.Field;
 import com.gitblit.models.TicketModel.Patchset;
 import com.gitblit.models.TicketModel.PatchsetType;
-import com.gitblit.models.TicketModel.Reference;
-import com.gitblit.models.TicketModel.ReferenceType;
 import com.gitblit.models.TicketModel.Status;
+import com.gitblit.models.TicketModel.TicketLink;
 import com.gitblit.tickets.TicketIndexer.Lucene;
 import com.gitblit.utils.DeepCopier;
 import com.gitblit.utils.DiffUtils;
@@ -1043,23 +1042,6 @@ public abstract class ITicketService implements IManager {
 		TicketKey key = new TicketKey(repository, ticketId);
 		ticketsCache.invalidate(key);
 
-		List<Reference> ticketReferences = new ArrayList<Reference>();
-		List<Reference> ownReferences = new ArrayList<Reference>();
-		
-		//RULE: Only changes with a comment can back reference the ticket
-		//		Critical rule to avoid infinite references been made
-		if (change.hasComment() && change.hasReferences()) {
-			//References to tickets are stored in the tickets referenced
-			for (Reference ref : change.references) {
-				if (ref.getReferenceType() == ReferenceType.Ticket) {
-					ticketReferences.add(ref);
-				} else {
-					ownReferences.add(ref);
-				}
-			}
-			change.references = ownReferences;
-		}
-		
 		boolean success = commitChangeImpl(repository, ticketId, change);
 		if (success) {
 			TicketModel ticket = getTicket(repository, ticketId);
@@ -1077,13 +1059,34 @@ public abstract class ITicketService implements IManager {
 				}
 			}
 
-			//For valid ticket references add references back to this ticket
-			for (Reference ref : ticketReferences) {
-				TicketModel refTicket = getTicket(repository, ref.ticketId);
-				if (refTicket != null) {
-					Change dstChange = new Change(change.author, change.date);
-					dstChange.addReferenceToTicket(ticket.number, change.comment.id);
-					updateTicket(repository, ref.ticketId , dstChange);
+			//Now that the ticket has been successfully persisted add references to this ticket from linked tickets
+			if (change.hasPendingLinks()) {
+				for (TicketLink link : change.pendingLinks) {
+					TicketModel linkedTicket = getTicket(repository, link.targetTicketId);
+					Change dstChange = null;
+					
+					if (linkedTicket != null) {
+						switch (link.action) {
+							case Comment: {
+								dstChange = new Change(change.author, change.date);
+								dstChange.referenceTicket(ticket.number, change.comment.id);
+							} break;
+							
+							case Commit: {
+								dstChange = new Change(change.author, change.date);
+								dstChange.referenceCommit(link.hash);
+							} break;
+							
+							default: {
+								log.warn("Skipping link - No idea how to persist link of type %s", link.action);
+							} break;
+						}
+					}
+					
+					if (  (dstChange != null) && 
+						  (updateTicket(repository, link.targetTicketId, dstChange) != null)) {
+						link.success = true;
+					}
 				}
 			}
 
