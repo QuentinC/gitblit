@@ -860,9 +860,6 @@ public class TicketPage extends RepositoryPage {
 				if (event.hasPatchset()) {
 					// patchset
 					Patchset patchset = event.patchset;
-					//In the case of using a cached change list
-					item.setVisible(!patchset.isDeleted());
-					
 					String what;
 					if (event.isStatusChange() && (Status.New == event.getStatus())) {
 						what = getString("gb.proposedThisChange");

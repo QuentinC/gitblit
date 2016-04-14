@@ -30,7 +30,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.eclipse.jgit.lib.AnyObjectId;
 import org.eclipse.jgit.lib.BatchRefUpdate;
 import org.eclipse.jgit.lib.NullProgressMonitor;
 import org.eclipse.jgit.lib.ObjectId;
@@ -607,7 +606,8 @@ public class PatchsetReceivePack extends GitblitReceivePack {
 			}
 		}
 
-		List<TicketLink> ticketLinks = identifyTickets(tipCommit, true, ticket == null ? 0 : ticket.number);
+		List<TicketLink> ticketLinks = JGitUtils.identifyTickets(getRepository(), settings, 
+				tipCommit, true, ticket == null ? 0 : ticket.number);
 		
 		// check to see if this commit is already linked to a ticket
 		if (ticketLinks == null) {
@@ -914,7 +914,7 @@ public class PatchsetReceivePack extends GitblitReceivePack {
 			RevCommit c;
 			while ((c = rw.next()) != null) {
 				rw.parseBody(c);
-				List<TicketLink> ticketLinks = identifyTickets(c, true, 0);
+				List<TicketLink> ticketLinks = JGitUtils.identifyTickets(getRepository(), settings, c, true, 0);
 				if (ticketLinks == null) {
 					continue;
 				}
@@ -1066,82 +1066,7 @@ public class PatchsetReceivePack extends GitblitReceivePack {
 		return mergedTickets.values();
 	}
 
-	/**
-	 * Try to identify all linked tickets from the commit.
-	 *
-	 * @param commit
-	 * @param parseMessage
-	 * @param currentTicketId, or 0 if not on a ticket branch
-	 * @return a collection of TicketLink, or null if commit is already linked
-	 */
-	private List<TicketLink> identifyTickets(RevCommit commit, boolean parseMessage, long currentTicketId) {
-		List<TicketLink> ticketLinks = new ArrayList<TicketLink>();
-		List<Long> linkedTickets = new ArrayList<Long>();
-		linkedTickets.add(currentTicketId);
-		
-		// try lookup by change ref
-		Map<AnyObjectId, Set<Ref>> map = getRepository().getAllRefsByPeeledObjectId();
-		Set<Ref> refs = map.get(commit.getId());
-		if (!ArrayUtils.isEmpty(refs)) {
-			for (Ref ref : refs) {
-				long number = PatchsetCommand.getTicketNumber(ref.getName());
-				
-				if (number > 0) {
-					return null;
-				}
-			}
-		}
-
-		if (parseMessage) {
-			// parse commit message looking for fixes/closes #n
-			String dx = "(?:fixes|closes)[\\s-]+#?(\\d+)";
-			String x = settings.getString(Keys.tickets.closeOnPushCommitMessageRegex, dx);
-			if (StringUtils.isEmpty(x)) {
-				x = dx;
-			}
-			try {
-				Pattern p = Pattern.compile(x, Pattern.CASE_INSENSITIVE);
-				Matcher m = p.matcher(commit.getFullMessage());
-				while (m.find()) {
-					String val = m.group(1);
-					long number = Long.parseLong(val); 
-					
-					if (number > 0) {
-						ticketLinks.add(new TicketLink(number, TicketAction.Close));
-						linkedTickets.add(number);
-					}
-				}
-			} catch (Exception e) {
-				LOGGER.error(String.format("Failed to parse \"%s\" in commit %s", x, commit.getName()), e);
-			}
-		}
-		
-		if (parseMessage) {
-			// parse commit message looking for ref #n
-			String dx = "(?:ref|task|issue|bug)?[\\s-]*#?(\\d+)";
-			String x = settings.getString(Keys.tickets.linkOnPushCommitMessageRegex, dx);
-			if (StringUtils.isEmpty(x)) {
-				x = dx;
-			}
-			try {
-				Pattern p = Pattern.compile(x, Pattern.CASE_INSENSITIVE);
-				Matcher m = p.matcher(commit.getFullMessage());
-				while (m.find()) {
-					String val = m.group(1);
-					long number = Long.parseLong(val); 
-					//Most generic case so don't included tickets more precisely linked
-					if ((number > 0) && (!linkedTickets.contains(number))) {
-						ticketLinks.add( new TicketLink(number, TicketAction.Commit, commit.getName()));
-						linkedTickets.add(number);
-					}
-				}
-			} catch (Exception e) {
-				LOGGER.error(String.format("Failed to parse \"%s\" in commit %s", x, commit.getName()), e);
-			}
-		}
-
-		return ticketLinks;
-	}
+	
 
 	private int countCommits(String baseId, String tipId) {
 		int count = 0;

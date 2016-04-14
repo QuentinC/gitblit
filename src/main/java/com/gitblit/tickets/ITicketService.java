@@ -30,6 +30,9 @@ import java.util.concurrent.TimeUnit;
 
 import org.eclipse.jgit.lib.Repository;
 import org.eclipse.jgit.lib.StoredConfig;
+import org.eclipse.jgit.revwalk.RevCommit;
+import org.eclipse.jgit.revwalk.RevSort;
+import org.eclipse.jgit.revwalk.RevWalk;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -54,6 +57,7 @@ import com.gitblit.models.TicketModel.TicketLink;
 import com.gitblit.tickets.TicketIndexer.Lucene;
 import com.gitblit.utils.DeepCopier;
 import com.gitblit.utils.DiffUtils;
+import com.gitblit.utils.JGitUtils;
 import com.gitblit.utils.DiffUtils.DiffStat;
 import com.gitblit.utils.StringUtils;
 import com.google.common.cache.Cache;
@@ -1066,26 +1070,33 @@ public abstract class ITicketService implements IManager {
 					Change dstChange = null;
 					
 					if (linkedTicket != null) {
+						dstChange = new Change(change.author, change.date);
+						
 						switch (link.action) {
 							case Comment: {
-								dstChange = new Change(change.author, change.date);
 								dstChange.referenceTicket(ticket.number, change.comment.id);
 							} break;
 							
 							case Commit: {
-								dstChange = new Change(change.author, change.date);
 								dstChange.referenceCommit(link.hash);
 							} break;
 							
 							default: {
+								dstChange = null;
 								log.warn("Skipping link - No idea how to persist link of type %s", link.action);
 							} break;
 						}
 					}
 					
-					if (  (dstChange != null) && 
-						  (updateTicket(repository, link.targetTicketId, dstChange) != null)) {
-						link.success = true;
+					if (dstChange != null) {
+						//If not deleted then remain null in journal
+						if (link.isDelete) {
+							dstChange.reference.deleted = true;
+						}
+
+						if (updateTicket(repository, link.targetTicketId, dstChange) != null) {
+							link.success = true;
+						}
 					}
 				}
 			}
@@ -1265,9 +1276,43 @@ public abstract class ITicketService implements IManager {
 		deletion.patchset.number = patchset.number;
 		deletion.patchset.rev = patchset.rev;
 		deletion.patchset.type = PatchsetType.Delete;
+		//Find and delete references to tickets by the removed commits
+		Repository repository = repositoryManager.getRepository(ticket.repository);
+		List<TicketLink> patchsetTicketLinks = new ArrayList<TicketLink>();
 		
-		RepositoryModel repository = repositoryManager.getRepositoryModel(ticket.repository);
-		TicketModel revisedTicket = updateTicket(repository, ticket.number, deletion);
+		RevWalk walk = new RevWalk(repository);
+		walk.sort(RevSort.TOPO);
+		walk.sort(RevSort.REVERSE, true);
+		try {
+			RevCommit tip = walk.parseCommit(repository.resolve(patchset.tip));
+			RevCommit base = walk.parseCommit(repository.resolve(patchset.base));
+			walk.markStart(tip);
+			walk.markUninteresting(base);
+			for (;;) {
+				RevCommit commit = walk.next();
+				if (commit == null) {
+					break;
+				}
+				List<TicketLink> commitTicketLinks = JGitUtils.identifyTickets(repository, settings, commit, true, ticket.number);
+				if (commitTicketLinks != null) {
+					patchsetTicketLinks.addAll(commitTicketLinks);
+				}
+			}
+		} catch (IOException e) {
+			// Should never happen, the core receive process would have
+			// identified the missing object earlier before we got control.
+			log.error("failed to get commit ticket links during delete patchset", e);
+		} finally {
+			walk.close();
+		}
+		
+		for (TicketLink link : patchsetTicketLinks) {
+			link.isDelete = true;
+		}
+		deletion.pendingLinks = patchsetTicketLinks;
+		
+		RepositoryModel repositoryModel = repositoryManager.getRepositoryModel(ticket.repository);
+		TicketModel revisedTicket = updateTicket(repositoryModel, ticket.number, deletion);
 		
 		return revisedTicket;
 	} 

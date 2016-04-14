@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.Map.Entry;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -52,6 +53,7 @@ import org.eclipse.jgit.errors.LargeObjectException;
 import org.eclipse.jgit.errors.MissingObjectException;
 import org.eclipse.jgit.errors.StopWalkException;
 import org.eclipse.jgit.internal.JGitText;
+import org.eclipse.jgit.lib.AnyObjectId;
 import org.eclipse.jgit.lib.BlobBasedConfig;
 import org.eclipse.jgit.lib.CommitBuilder;
 import org.eclipse.jgit.lib.Constants;
@@ -94,16 +96,18 @@ import org.eclipse.jgit.util.FS;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.gitblit.GitBlit;
 import com.gitblit.GitBlitException;
-import com.gitblit.manager.GitblitManager;
+import com.gitblit.IStoredSettings;
+import com.gitblit.Keys;
+import com.gitblit.git.PatchsetCommand;
 import com.gitblit.models.FilestoreModel;
 import com.gitblit.models.GitNote;
 import com.gitblit.models.PathModel;
 import com.gitblit.models.PathModel.PathChangeModel;
+import com.gitblit.models.TicketModel.TicketAction;
+import com.gitblit.models.TicketModel.TicketLink;
 import com.gitblit.models.RefModel;
 import com.gitblit.models.SubmoduleModel;
-import com.gitblit.servlet.FilestoreServlet;
 import com.google.common.base.Strings;
 
 /**
@@ -2739,6 +2743,84 @@ public class JGitUtils {
 			LOGGER.error("Failed to determine isTip", e);
 		}
 		return false;
+	}
+	
+	/**
+	 * Try to identify all linked tickets from the commit.
+	 *
+	 * @param commit
+	 * @param parseMessage
+	 * @param currentTicketId, or 0 if not on a ticket branch
+	 * @return a collection of TicketLink, or null if commit is already linked
+	 */
+	public static List<TicketLink> identifyTickets(Repository repository, IStoredSettings settings,
+			RevCommit commit, boolean parseMessage, long currentTicketId) {
+		List<TicketLink> ticketLinks = new ArrayList<TicketLink>();
+		List<Long> linkedTickets = new ArrayList<Long>();
+		linkedTickets.add(currentTicketId);
+		
+		// try lookup by change ref
+		Map<AnyObjectId, Set<Ref>> map = repository.getAllRefsByPeeledObjectId();
+		Set<Ref> refs = map.get(commit.getId());
+		if (!ArrayUtils.isEmpty(refs)) {
+			for (Ref ref : refs) {
+				long number = PatchsetCommand.getTicketNumber(ref.getName());
+				
+				if (number > 0) {
+					return null;
+				}
+			}
+		}
+
+		if (parseMessage) {
+			// parse commit message looking for fixes/closes #n
+			String dx = "(?:fixes|closes)[\\s-]+#?(\\d+)";
+			String x = settings.getString(Keys.tickets.closeOnPushCommitMessageRegex, dx);
+			if (StringUtils.isEmpty(x)) {
+				x = dx;
+			}
+			try {
+				Pattern p = Pattern.compile(x, Pattern.CASE_INSENSITIVE);
+				Matcher m = p.matcher(commit.getFullMessage());
+				while (m.find()) {
+					String val = m.group(1);
+					long number = Long.parseLong(val); 
+					
+					if (number > 0) {
+						ticketLinks.add(new TicketLink(number, TicketAction.Close));
+						linkedTickets.add(number);
+					}
+				}
+			} catch (Exception e) {
+				LOGGER.error(String.format("Failed to parse \"%s\" in commit %s", x, commit.getName()), e);
+			}
+		}
+		
+		if (parseMessage) {
+			// parse commit message looking for ref #n
+			String dx = "(?:ref|task|issue|bug)?[\\s-]*#?(\\d+)";
+			String x = settings.getString(Keys.tickets.linkOnPushCommitMessageRegex, dx);
+			if (StringUtils.isEmpty(x)) {
+				x = dx;
+			}
+			try {
+				Pattern p = Pattern.compile(x, Pattern.CASE_INSENSITIVE);
+				Matcher m = p.matcher(commit.getFullMessage());
+				while (m.find()) {
+					String val = m.group(1);
+					long number = Long.parseLong(val); 
+					//Most generic case so don't included tickets more precisely linked
+					if ((number > 0) && (!linkedTickets.contains(number))) {
+						ticketLinks.add( new TicketLink(number, TicketAction.Commit, commit.getName()));
+						linkedTickets.add(number);
+					}
+				}
+			} catch (Exception e) {
+				LOGGER.error(String.format("Failed to parse \"%s\" in commit %s", x, commit.getName()), e);
+			}
+		}
+
+		return ticketLinks;
 	}
 
 }
